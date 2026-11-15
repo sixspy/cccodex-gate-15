@@ -1,0 +1,41 @@
+name: gate-event-lake-gate-15
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3325:80"
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8325:8000"
+    environment:
+      DATABASE_URL: postgresql://app:app@db:5432/gatelake
+      JWT_SECRET: gate-event-lake-dev-secret
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: docker.m.daocloud.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: gatelake
+    ports:
+      - "54525:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d gatelake"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pgdata:
