@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Landing from "./Landing.jsx";
 
 function loadProfile() {
   try {
@@ -28,18 +29,25 @@ export default function App() {
   const [dates, setDates] = useState([]);
   const [detail, setDetail] = useState(null);
   const [formError, setFormError] = useState("");
+  const [landingMessage, setLandingMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [view, setView] = useState("layers");
+  const [landing, setLanding] = useState(null);
 
-  async function refresh(prefer) {
+  async function refreshDates(prefer) {
     const rows = await request("/api/dates");
     setDates(rows);
     const target = prefer || detail?.biz_date || rows[0]?.biz_date;
     if (target) setDetail(await request(`/api/dates/${target}`));
   }
 
+  async function refreshLanding() {
+    setLanding(await request("/api/landing"));
+  }
+
   useEffect(() => {
     if (!profile) return;
-    refresh().catch(() => {
+    Promise.all([refreshDates(), refreshLanding()]).catch(() => {
       localStorage.removeItem("lake.token");
       localStorage.removeItem("lake.profile");
       setProfile(null);
@@ -71,9 +79,51 @@ export default function App() {
     try {
       const data = await request(`/api/dates/${detail.biz_date}/build`, { method: "POST" });
       setDetail(data);
-      setDates(await request("/api/dates"));
+      await refreshDates();
+      await refreshLanding();
     } catch (error) {
       setFormError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function lockSetting(payload) {
+    setBusy(true);
+    setLandingMessage("");
+    try {
+      setLanding(
+        await request("/api/landing/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+      );
+      setLandingMessage(`业务日 ${payload.biz_date} 的落批办法已写定收束，当日禁止改口`);
+      await refreshDates();
+    } catch (error) {
+      setLandingMessage(error.message);
+      await refreshLanding();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function orchestrate(payload) {
+    setBusy(true);
+    setLandingMessage("");
+    try {
+      const data = await request("/api/landing/orchestrate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setLanding(data);
+      setLandingMessage("落批完成，落批列表、失败详情、落批设置、死信队列已同轮核齐");
+      await refreshDates();
+    } catch (error) {
+      setLandingMessage(error.message);
+      await refreshLanding();
     } finally {
       setBusy(false);
     }
@@ -84,14 +134,15 @@ export default function App() {
     localStorage.removeItem("lake.profile");
     setProfile(null);
     setDetail(null);
+    setLanding(null);
   }
 
   if (!profile) {
     return (
       <main className="sheet gate">
-        <p className="kicker">贴源层 → 明细层</p>
+        <p className="kicker">贴源层 → 明细层 · 落批台</p>
         <h1>闸口事件湖仓台</h1>
-        <p>扫描原文先落贴源。只有字典认得出的事件才收进明细。</p>
+        <p>扫描原文先落贴源。失败批次按写定的落批办法收口，只有字典认得出的事件才收进明细。</p>
         <form onSubmit={submitLogin}>
           <label>用户<input value={username} onChange={(event) => setUsername(event.target.value)} /></label>
           <label>口令<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
@@ -106,10 +157,18 @@ export default function App() {
     <>
       <header className="bar">
         <div>
-          <p className="kicker">闸口扫描 · 分层</p>
+          <p className="kicker">闸口扫描 · 分层 · 落批</p>
           <h1>闸口事件湖仓台</h1>
         </div>
         <div className="who">
+          <nav className="views">
+            <button className={view === "layers" ? "line on" : "line"} onClick={() => setView("layers")}>
+              分层台
+            </button>
+            <button className={view === "landing" ? "line on" : "line"} onClick={() => setView("landing")}>
+              落批台
+            </button>
+          </nav>
           <span>{profile.title} {profile.username}</span>
           <button className="line" onClick={logout}>离开</button>
         </div>
@@ -125,10 +184,22 @@ export default function App() {
               <strong>{row.biz_date}</strong>
               <em>{row.built ? "明细已收" : "尚未构建"}</em>
               <span>贴源 {row.ods_count} 条 · 明细 {row.dwd_count} 条</span>
+              {row.pending_batches > 0 ? (
+                <span className="pending-pill">待落批 {row.pending_batches} 批</span>
+              ) : null}
             </button>
           ))}
         </aside>
-        {detail ? (
+        {view === "landing" ? (
+          <Landing
+            data={landing}
+            profile={profile}
+            busy={busy}
+            message={landingMessage}
+            onLock={lockSetting}
+            onOrchestrate={orchestrate}
+          />
+        ) : detail ? (
           <section className="sheet">
             <div className="split-head">
               <h2>{detail.biz_date}</h2>
@@ -145,7 +216,7 @@ export default function App() {
                 <ul>
                   {detail.ods.map((row) => (
                     <li key={row.id}>
-                      <span>{row.terminal_code}</span>
+                      <span>{row.terminal_code}{row.batch_no ? ` · 批次 ${row.batch_no}` : " · 空批次号"}</span>
                       <code>{JSON.stringify(row.raw_payload)}</code>
                     </li>
                   ))}
@@ -170,7 +241,7 @@ export default function App() {
                     </tbody>
                   </table>
                 ) : <p>这一天的明细还是空的。</p>}
-                <h3>剔除</h3>
+                <h3>剔除（空批次号散扫）</h3>
                 <ul>
                   {detail.rejects.map((row) => (
                     <li key={row.source_id}><span>来源 {row.source_id}</span><em>{row.reason}</em></li>

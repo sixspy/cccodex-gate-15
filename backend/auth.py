@@ -16,6 +16,8 @@ def _digest(password: str) -> str:
 USERS = {
     "admin": {"role": "writer", "digest": _digest("123456"), "title": "建层员"},
     "checker": {"role": "reader", "digest": _digest("chk123456"), "title": "核对员"},
+    "keeper1": {"role": "keeper", "digest": _digest("keep123456"), "title": "仓管"},
+    "keeper2": {"role": "keeper", "digest": _digest("keep123456"), "title": "仓管"},
 }
 
 
